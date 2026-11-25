@@ -1,0 +1,22 @@
+{
+  "name": "secure-connect-communication-platform",
+  "version": "1.0.0",
+  "description": "Lab 4 - Web Dev III: Secure Connect and Communication Platform (Node.js, Express, JWT, bcrypt, dotenv, Socket.IO, EventEmitter)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node tests/run-tests.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}

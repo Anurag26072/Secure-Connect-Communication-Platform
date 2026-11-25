@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Secure Connect</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --fg:#e2e8f0; --muted:#94a3b8; --accent:#6366f1; --ok:#22c55e; --err:#ef4444; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:960px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  h1 { font-size:1.4rem; } h2 { font-size:1.05rem; margin:0 0 10px; }
+  section { background:var(--card); padding:16px; border-radius:10px; }
+  input, textarea, button { font:inherit; padding:8px 10px; border-radius:6px; border:1px solid #334155; background:#0f172a; color:var(--fg); }
+  button { background:var(--accent); border:0; cursor:pointer; }
+  button.danger { background:var(--err); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; } .row > input { flex:1; min-width:120px; }
+  #status { color:var(--muted); font-size:.9rem; } .ok { color:var(--ok); } .err { color:var(--err); }
+  #chat { height:240px; overflow:auto; background:#0f172a; border-radius:6px; padding:8px; margin-bottom:8px; font-size:.92rem; }
+  #chat .sys { color:var(--muted); font-style:italic; }
+  .note { background:#0f172a; padding:8px 10px; border-radius:6px; margin-bottom:6px; display:flex; justify-content:space-between; gap:8px; }
+  .note small { color:var(--muted); display:block; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🔐 Secure Connect &amp; Communication Platform</h1>
+  <div id="status">Not logged in</div>
+
+  <section id="authBox">
+    <h2>Sign up / Login</h2>
+    <div class="row">
+      <input id="username" placeholder="username (signup only)" />
+      <input id="email" type="email" placeholder="email" />
+      <input id="password" type="password" placeholder="password (min 6)" />
+    </div>
+    <div class="row"><button id="signupBtn">Sign up</button><button id="loginBtn">Login</button></div>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="row"><button id="logoutBtn" class="danger">Logout</button></div>
+
+    <h2>My Notes</h2>
+    <div class="row"><input id="noteTitle" placeholder="Title" /><input id="noteContent" placeholder="Content" /><button id="addNote">Add</button></div>
+    <div id="notes"></div>
+  </section>
+
+  <section id="chatBox" class="hidden">
+    <h2>Real-time Chat — room: <span id="roomName">general</span></h2>
+    <div class="row"><input id="room" placeholder="room name" value="general" /><button id="joinBtn">Join room</button></div>
+    <div id="chat"></div>
+    <div id="typing" class="sys" style="min-height:1.2em;color:var(--muted)"></div>
+    <div class="row"><input id="msg" placeholder="Type a message…" /><button id="sendBtn">Send</button></div>
+  </section>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = localStorage.getItem('token');
+let socket;
+
+const status = (text, cls = '') => { $('status').textContent = text; $('status').className = cls; };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+async function api(path, method = 'GET', body) {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || res.statusText);
+  return data;
+}
+
+function showApp(on) {
+  $('authBox').classList.toggle('hidden', on);
+  $('app').classList.toggle('hidden', !on);
+  $('chatBox').classList.toggle('hidden', !on);
+}
+
+async function enter() {
+  try {
+    const me = await api('/auth/me');
+    status(`Logged in as ${me.username} (${me.role})`, 'ok');
+    showApp(true);
+    loadNotes();
+    connectSocket();
+  } catch { token = null; localStorage.removeItem('token'); showApp(false); }
+}
+
+$('signupBtn').onclick = async () => {
+  try {
+    const r = await api('/auth/signup', 'POST', { username: $('username').value, email: $('email').value, password: $('password').value });
+    status(r.message + ' — now login', 'ok');
+  } catch (e) { status(e.message, 'err'); }
+};
+$('loginBtn').onclick = async () => {
+  try {
+    const r = await api('/auth/login', 'POST', { email: $('email').value, password: $('password').value });
+    token = r.token; localStorage.setItem('token', token); enter();
+  } catch (e) { status(e.message, 'err'); }
+};
+$('logoutBtn').onclick = async () => {
+  await api('/auth/logout', 'POST').catch(() => {});
+  token = null; localStorage.removeItem('token'); socket && socket.disconnect(); showApp(false); status('Logged out');
+};
+
+async function loadNotes() {
+  const notes = await api('/notes');
+  $('notes').innerHTML = notes.map((n) => `<div class="note"><div><b>${esc(n.title)}</b><small>${esc(n.content)}</small></div>
+    <div><button data-edit="${n._id}">Edit</button> <button class="danger" data-del="${n._id}">Delete</button></div></div>`).join('') || '<small>No notes yet</small>';
+}
+$('addNote').onclick = async () => {
+  try { await api('/notes', 'POST', { title: $('noteTitle').value, content: $('noteContent').value }); $('noteTitle').value = $('noteContent').value = ''; loadNotes(); }
+  catch (e) { status(e.message, 'err'); }
+};
+$('notes').onclick = async (e) => {
+  const del = e.target.dataset.del, edit = e.target.dataset.edit;
+  try {
+    if (del) await api('/notes/' + del, 'DELETE');
+    if (edit) {
+      const title = prompt('New title?'); const content = prompt('New content?');
+      const body = {}; if (title) body.title = title; if (content) body.content = content;
+      if (Object.keys(body).length) await api('/notes/' + edit, 'PUT', body);
+    }
+    loadNotes();
+  } catch (err) { status(err.message, 'err'); }
+};
+
+function line(html, cls = '') { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; $('chat').append(d); $('chat').scrollTop = 1e9; }
+function connectSocket() {
+  if (socket) socket.disconnect();
+  socket = io({ auth: { token } });
+  socket.on('connect_error', (e) => line('Connection error: ' + esc(e.message), 'sys'));
+  socket.on('joined', ({ room, history }) => { $('chat').innerHTML = ''; $('roomName').textContent = room; history.forEach((m) => line(`<b>${esc(m.username)}:</b> ${esc(m.text)}`)); });
+  socket.on('chatMessage', (m) => line(`<b>${esc(m.username)}:</b> ${esc(m.text)}`));
+  socket.on('system', (m) => line(`${esc(m.text)} (online: ${m.users.map(esc).join(', ')})`, 'sys'));
+  socket.on('error_message', (t) => line(esc(t), 'sys'));
+  let t; socket.on('typing', ({ username }) => { $('typing').textContent = username + ' is typing…'; clearTimeout(t); t = setTimeout(() => $('typing').textContent = '', 1500); });
+}
+$('joinBtn').onclick = () => socket.emit('joinRoom', $('room').value.trim());
+const send = () => { const text = $('msg').value; if (text.trim()) { socket.emit('chatMessage', { text }); $('msg').value = ''; } };
+$('sendBtn').onclick = send;
+$('msg').onkeydown = (e) => e.key === 'Enter' ? send() : socket.emit('typing');
+
+if (token) enter();
+</script>
+</body>
+</html>
